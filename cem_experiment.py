@@ -18,10 +18,11 @@ from ast import literal_eval as make_tuple
 from stable_baselines3.sac.policies import MlpPolicy
 from stable_baselines3 import SAC
 from stable_baselines3.common.env_checker import check_env
+import panda_sim_grasp as panda_sim_grasp
 import panda_sim
 
 finalForce = np.array([0,0,0])
-location = [0,0,0,0,1,0,0,0]
+location = [0,0,0,0,-0.707107, 0.0, 0.0, 0.707107]
 force = np.array([0,0,0])
 
 #Network communication thread function for Touch X Haptics
@@ -98,8 +99,8 @@ class CustomEnv(gym.Env):
 
         #Action space for end effector 3 dimensional
         self.action_space = gym.spaces.box.Box(
-            low = np.full(8,-0.06,dtype=np.float32),
-            high = np.full(8,0.06,dtype=np.float32)
+            low = np.full(8,-0.01,dtype=np.float32),
+            high = np.full(8,0.01,dtype=np.float32)
         )
         #Observation space comprising of target position
         self.observation_space = gym.spaces.box.Box(
@@ -112,22 +113,14 @@ class CustomEnv(gym.Env):
         p.configureDebugVisualizer(p.COV_ENABLE_Y_AXIS_UP,1)
         p.setAdditionalSearchPath(pd.getDataPath())
 
-        self.timeStep=1./60.
+        self.timeStep=1./120.
         p.setTimeStep(self.timeStep)
         p.setGravity(0,-9.8,0)
 
         processThread = threading.Thread(target=netCom)
         processThread.start()
         self.target_pos = [3,2,1]
-        flags = p.URDF_ENABLE_CACHED_GRAPHICS_SHAPES
-        legos=[]
-        p.loadURDF("table/table.urdf", [0.25, 0.2, -0.65], [-0.5, -0.5, -0.5, 0.5], flags=flags)
-        
-        self.panda = panda_sim.PandaSim(p,[0,0.81,0])
-        self.panda2 = panda_sim.PandaSim(p,[3,0.81,0])
-        self.panda3 = panda_sim.PandaSim(p,[0.4,0.81,-1.5], rotate = True)
-        self.panda4 = panda_sim.PandaSim(p,[3.4,0.81,-1.5], rotate = True)
-        p.enableJointForceTorqueSensor(self.panda.panda, 7,1)
+        self.setupscene()
         self.ep = 0
         self.max_ep = 2500
 
@@ -136,8 +129,9 @@ class CustomEnv(gym.Env):
         print("Ep :", self.ep)
         stime = time.time()
         if(self.ep <=1):
-            link_pos,link_orn,_,_,_,_ = p.getLinkState(self.panda3.panda,11)
 
+            link_pos = self.panda3.link_pos
+            link_orn = self.panda3.link_orn
             #self.last_pos = np.concatenate((np.array([0,1.41,-0.3,0]),p.getQuaternionFromEuler([math.pi/2.,0.,0.])))
             self.last_pos = np.concatenate((np.array(link_pos),np.array([0]),np.array(link_orn)))
         #Calculate Jacobian
@@ -147,7 +141,7 @@ class CustomEnv(gym.Env):
 	# jac_t, jac_r = p.calculateJacobian(panda.panda, 7,[0., 0., 0.0], list(q) + [0.] * 2, [0.] * 9, [0.] * 9,physicsClientId=0)
 	# J = np.concatenate((np.array(jac_t)[:, :7], np.array(jac_r)[:, :7]), axis=0)
 	# print(J)
-
+        
         loc = location
         #TODO Proper values for next 3
         self.target_pos = [0.4,1.41,-1.4]
@@ -162,7 +156,7 @@ class CustomEnv(gym.Env):
         pos = pos + self.last_pos
         self.last_pos = pos
         pos = tuple(pos)
-
+        print("Pos ", pos)
         first_dist = distance.euclidean(self.target_pos, p.getLinkState(self.panda3.panda,self.panda3.pandaEndEffectorIndex)[0])
 
 
@@ -179,9 +173,10 @@ class CustomEnv(gym.Env):
         #self.panda2.step(position = tuple(np.array(loc) + [1,0,0,0,0,0,0,0]))
 
         #autonomous robot control
-        des2 = self.panda4.accurateInverseKinematics(tuple(np.array(pos) + [600,0,0,0,0,0,0,0]), 0.1,50,rp=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02] )
+        des2 = self.panda4.accurateInverseKinematics(tuple(np.array(pos) + [3,0,0,0,0,0,0,0]), 0.1,50,rp=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02], mode = True )
         self.panda3.step3(des2)
 
+        #self.panda5.step3(des2)
 
         p.stepSimulation()
         dist = distance.euclidean(self.target_pos, p.getLinkState(self.panda3.panda,self.panda3.pandaEndEffectorIndex)[0])
@@ -191,7 +186,7 @@ class CustomEnv(gym.Env):
         print("Distance ", dist)
         print("Reward ", reward)
         t = time.time() - stime
-        t_sleep = t- self.timeStep
+        t_sleep = self.timeStep -t
         if(t_sleep) >0:
             
             time.sleep(self.timeStep)
@@ -200,17 +195,27 @@ class CustomEnv(gym.Env):
         p.resetSimulation()
         p.setTimeStep(self.timeStep)
         p.setGravity(0,-9.8,0)
-        self.panda = panda_sim.PandaSim(p,[0,0.81,0])
-        flags = p.URDF_ENABLE_CACHED_GRAPHICS_SHAPES
-        legos=[]
-        p.loadURDF("table/table.urdf", [0, 0.2, -0.65], [-0.5, -0.5, -0.5, 0.5], flags=flags)
-        self.panda2 = panda_sim.PandaSim(p,[3,0.81,0])
-        self.panda3 = panda_sim.PandaSim(p,[0.2,0.81,-1.3], rotate = True)
-        self.panda4 = panda_sim.PandaSim(p,[3.2,0.81,-1.3], rotate = True)
-        
-        p.enableJointForceTorqueSensor(self.panda.panda, 7,1)
+        self.setupscene()
         return np.array(self.target_pos)
         
+    def setupscene(self):
+        flags = p.URDF_ENABLE_CACHED_GRAPHICS_SHAPES
+        legos=[]
+        p.loadURDF("table/table.urdf", [0.25, 0.2, -0.65], [-0.5, -0.5, -0.5, 0.5], flags=flags)
+        p.loadURDF("jenga/jenga.urdf", [0, 0.91, -0.65], [-0.5, -0.5, -0.5, 0.5], globalScaling = 1)
+        self.panda = panda_sim.PandaSim(p,[0,0.81,0])
+        self.panda2 = panda_sim.PandaSim(p,[3,0.81,0])
+        #self.panda3 = panda_sim.PandaSim(p,[0.4,0.81,-1.5], rotate = True)
+        self.panda4 = panda_sim.PandaSim(p,[3.4,0.81,-1.5], rotate = True)
+        self.panda3 = panda_sim_grasp.PandaSimAuto(p,[0.4,0.81,-1.5], rotate = True)
+        p.enableJointForceTorqueSensor(self.panda.panda, 7,1)
+
+        start = time.time()
+        while(time.time() < start+7.0):
+            self.panda3.step_g()
+            p.stepSimulation()
+            time.sleep(self.timeStep)
+
 
 
 env = CustomEnv()
@@ -220,9 +225,10 @@ model.save("sac_approach_duck")
 #check_env(env,True, True)
 i = 0
 while (1):
-    if keyboard.is_pressed('r'):  
-        env.reset()        #Action space for end effector 3 dimensional
-    #env.step(location)
+    # if keyboard.is_pressed('r'):  
+    #     env.reset()        #Action space for end effector 3 dimensional
+    
+    env.step([0,0,0,0,0, 0.0, 0.0, 0])
     # env.step([0,0+i/1000000,0,0,0,0,0,0])
     # i+=1
     # if(i>30000):
