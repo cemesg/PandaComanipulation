@@ -18,24 +18,30 @@ jointPositions=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02]
 rp = jointPositions
 
 class PandaSim(object):
-  def __init__(self, bullet_client, offset, rotate = False):
+  def __init__(self, bullet_client, offset, rotate = False, lego = None):
     self.bullet_client = bullet_client
     self.bullet_client.setPhysicsEngineParameter(solverResidualThreshold=0)
     self.offset = np.array(offset)
-    
+    self.rotate = rotate
     #print("offset=",offset)
     flags = self.bullet_client.URDF_ENABLE_CACHED_GRAPHICS_SHAPES
     self.legos=[]
-    
-    self.legos.append(self.bullet_client.loadURDF("jenga/jenga.urdf",np.array([0, 0.3, 0.3])+self.offset, flags=flags))
-    self.bullet_client.changeVisualShape(self.legos[0],-1,rgbaColor=[1,0,0,1])
-
     orn=[-0.707107, 0.0, 0.0, 0.707107]#p.getQuaternionFromEuler([-math.pi/2,math.pi/2,0])
     if(rotate):
       q1 = Quaternion(0.707107, -0.707107, 0.0, 0.0 ) # Rotate 180 about X
       q2 = Quaternion(axis=[0,0, 1], angle=3.14159265 ) 
       q3 = q1 * q2 # Composite rotation of q1 then q2 expressed as standard multiplication
       orn = (q3.x, q3.y, q3.z, q3.w)
+      q4 = Quaternion(axis= [0,0, 1], angle=math.pi/2)
+      q4 = q3*q4
+      orn2 = (q4.x, q4.y, q4.z, q4.w)
+    if(lego is None):
+      self.legos.append(self.bullet_client.loadURDF("jenga/jenga.urdf",np.array([0, 0.2, 0.5])+self.offset,orn2, globalScaling = 1.5))
+      self.bullet_client.changeVisualShape(self.legos[0],-1,rgbaColor=[1,0,0,1])
+    else:
+      self.legos.append(lego)
+
+
     eul = self.bullet_client.getEulerFromQuaternion([-0.5, -0.5, -0.5, 0.5])
     self.panda = self.bullet_client.loadURDF("franka_panda/panda.urdf", np.array([0,0,0])+self.offset, orn, useFixedBase=True, flags=flags)
     index = 0
@@ -92,7 +98,7 @@ class PandaSim(object):
             self.state = 0
   def step_g(self):
     self.link_pos,self.link_orn,_,_,_,_ = self.bullet_client.getLinkState(self.panda,11)
-    print("Hello", self.link_pos, self.link_orn)
+    #print("Hello", self.link_pos, self.link_orn)
     if self.state==6:
       self.finger_target = 0.005
     if self.state==5:
@@ -106,14 +112,17 @@ class PandaSim(object):
       #gripper_height = 0.034
       self.gripper_height = alpha * self.gripper_height + (1.-alpha)*0.03
       if self.state == 2 or self.state == 3 or self.state == 7:
-        self.gripper_height = alpha * self.gripper_height + (1.-alpha)*0.2
+        self.gripper_height = alpha * self.gripper_height + (1.-alpha)*0.3
       
       t = self.t
       self.t += self.control_dt
       pos = [self.offset[0]+0.2 * math.sin(1.5 * t), self.offset[1]+self.gripper_height, self.offset[2]+-0.6 + 0.1 * math.cos(1.5 * t)]
       if self.state == 3 or self.state== 4:
         pos, o = self.bullet_client.getBasePositionAndOrientation(self.legos[0])
-        pos = [pos[0], self.gripper_height + self.offset[1], pos[2]]
+        offset = 0.2
+        if(self.rotate):
+          offset*= -1
+        pos = [pos[0], self.gripper_height + self.offset[1], pos[2]+offset]
         self.prev_pos = pos
       if self.state == 7:
         pos = self.prev_pos
@@ -122,7 +131,7 @@ class PandaSim(object):
         self.prev_pos = [self.prev_pos[0] - diffX*0.1, self.prev_pos[1], self.prev_pos[2]-diffZ*0.1]
 
       	
-      orn = self.bullet_client.getQuaternionFromEuler([math.pi/2.,math.pi,0.])
+      orn = self.bullet_client.getQuaternionFromEuler([math.pi/2.,math.pi/2,0.])
       self.bullet_client.submitProfileTiming("IK")
       jointPoses = self.bullet_client.calculateInverseKinematics(self.panda,pandaEndEffectorIndex, pos, orn, ll, ul,
         jr, rp, maxNumIterations=20)
@@ -133,6 +142,7 @@ class PandaSim(object):
     for i in [9,10]:
       self.bullet_client.setJointMotorControl2(self.panda, i, self.bullet_client.POSITION_CONTROL,self.finger_target ,force= 10)
     self.bullet_client.submitProfileTiming()
+    self.link_pos,self.link_orn,_,_,_,_ = self.bullet_client.getLinkState(self.panda,11)
 
   def accurateInverseKinematics(self, position, treshold, maxIter,  rp=None, mode = False):
 
@@ -189,7 +199,7 @@ class PandaSim(object):
     #self.t += 1./60.
     #pos = [self.offset[0]+0.2 * math.sin(1.5 * t), self.offset[1]+0.044, self.offset[2]+-0.6 + 0.1 * math.cos(1.5 * t)]
     x,y,z,b, q,w,e,r = position
-    if(b):
+    if(b==1):
       self.finger_target = 0.01
     else:
       self.finger_target = 0.04
@@ -232,7 +242,7 @@ class PandaSim(object):
   def step3(self, jointPoses, pos = (0,0,0,1,-0.707107, 0.0, 0.0, 0.707107)):
       x,y,z,b, q,w,e,r = pos
       if(b == 1):
-        self.finger_target = 0.01
+        self.finger_target = 0.005
       else:
         self.finger_target = 0.04
         
@@ -245,15 +255,36 @@ class PandaSim(object):
       #self.bullet_client.setJointMotorControl2(self.panda, 5, self.bullet_client.POSITION_CONTROL,(g2)*360/400000 ,force= 10)
       #self.bullet_client.setJointMotorControl2(self.panda, 6, self.bullet_client.POSITION_CONTROL,(g1-1800)*360/400000 ,force= 10)   
       pass
-  def moveToCartAndQuat(self, cart, quat):
-      pass
+  def stepCQ(self, position = (0,0,0,0,-0.707107, 0.0, 0.0, 0.707107)):
+    #print(" Parameters", ll, ul, jr)
+    #t = self.t
+    #self.t += 1./60.
+    #pos = [self.offset[0]+0.2 * math.sin(1.5 * t), self.offset[1]+0.044, self.offset[2]+-0.6 + 0.1 * math.cos(1.5 * t)]
+    x,y,z,b, q,w,e,r = position
+    if(True):
+      self.finger_target = 0.005
+    else:
+      self.finger_target = 0.04
+    orn = (q,w,e,r)
+    pos = (x,y,z)
+    #jointPoses = self.bullet_client.calculateInverseKinematics(self.panda,pandaEndEffectorIndex, pos, orn, ll, ul,
+    jointPoses = self.bullet_client.calculateInverseKinematics(self.panda,pandaNumDofs, pos, orn, ll, ul,
+      jr, rp, maxNumIterations=5)
+      
+    for i in range(pandaNumDofs):
+        self.bullet_client.setJointMotorControl2(self.panda, i, self.bullet_client.POSITION_CONTROL, jointPoses[i],force=5 * 240.)
+    for i in [9,10]:
+      self.bullet_client.setJointMotorControl2(self.panda, i, self.bullet_client.POSITION_CONTROL,self.finger_target ,force= 40)
+    #self.bullet_client.setJointMotorControl2(self.panda, 5, self.bullet_client.POSITION_CONTROL,(g2)*360/400000 ,force= 10)
+    #self.bullet_client.setJointMotorControl2(self.panda, 6, self.bullet_client.POSITION_CONTROL,(g1-1800)*360/400000 ,force= 10)   
+    pass
 
 
 
 
 class PandaSimAuto(PandaSim):
-  def __init__(self, bullet_client, offset, rotate = False):
-    PandaSim.__init__(self, bullet_client, offset, rotate)
+  def __init__(self, bullet_client, offset, rotate = False, lego = None):
+    PandaSim.__init__(self, bullet_client, offset, rotate, lego)
     self.pandaEndEffectorIndex = 11
     self.state_t = 0
     self.cur_state = 0

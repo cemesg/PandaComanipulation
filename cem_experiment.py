@@ -20,6 +20,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.env_checker import check_env
 import panda_sim_grasp as panda_sim_grasp
 import panda_sim
+from pyquaternion import Quaternion
 
 finalForce = np.array([0,0,0])
 location = [0,0,0,0,-0.707107, 0.0, 0.0, 0.707107]
@@ -99,13 +100,13 @@ class CustomEnv(gym.Env):
 
         #Action space for end effector 3 dimensional
         self.action_space = gym.spaces.box.Box(
-            low = np.full(8,-0.01,dtype=np.float32),
-            high = np.full(8,0.01,dtype=np.float32)
+            low = np.full(8,-0.0008,dtype=np.float32),
+            high = np.full(8,0.0008,dtype=np.float32)
         )
         #Observation space comprising of target position
         self.observation_space = gym.spaces.box.Box(
-            low = np.full(3, -10,dtype=np.float32),
-            high = np.full(3,10,dtype=np.float32)
+            low = np.full(9, -1000,dtype=np.float32),
+            high = np.full(9,1000,dtype=np.float32)
         )
         self.max_ep = 250
         self.ep = 0
@@ -128,12 +129,13 @@ class CustomEnv(gym.Env):
     def step(self, pos):
         print("Ep :", self.ep)
         stime = time.time()
-        if(self.ep <=1):
+        if(self.ep <1):
+            link_pos,link_orn,_,_,_,_ = p.getLinkState(self.panda3.panda,7)
+            link_pos2,link_orn2,_,_,_,_ = p.getLinkState(self.panda.panda,7)
 
-            link_pos = self.panda3.link_pos
-            link_orn = self.panda3.link_orn
             #self.last_pos = np.concatenate((np.array([0,1.41,-0.3,0]),p.getQuaternionFromEuler([math.pi/2.,0.,0.])))
-            self.last_pos = np.concatenate((np.array(link_pos),np.array([0]),np.array(link_orn)))
+            self.last_pos = np.concatenate((np.array(link_pos),np.array([1]),np.array(link_orn)))
+            self.last_pos2 = np.concatenate((np.array(link_pos2),np.array([1]),np.array(link_orn2)))
         #Calculate Jacobian
 	# qdq_matrix = np.array([np.array(p.getJointState(bodyUniqueId=panda.panda, jointIndex=jointIndex, physicsClientId=0)[:2])for jointIndex in np.arange(1, 8)])
 	# q = qdq_matrix[:, 0]
@@ -143,6 +145,7 @@ class CustomEnv(gym.Env):
 	# print(J)
         
         loc = location
+        
         #TODO Proper values for next 3
         self.target_pos = [0.4,1.41,-1.4]
         reward = -1
@@ -152,10 +155,23 @@ class CustomEnv(gym.Env):
             done = True
             self.ep = 0
         pos = np.array(pos) 
+        pos2 = pos
+        pos2[0] = -pos2[0]
+        pos2[2] = -pos2[0]
+
 
         pos = pos + self.last_pos
+        pos2 = pos2 +self.last_pos2
         self.last_pos = pos
+        self.last_pos2 = pos2
         pos = tuple(pos)
+        pos2 = tuple(pos2)
+
+
+
+
+
+
         print("Pos ", pos)
         first_dist = distance.euclidean(self.target_pos, p.getLinkState(self.panda3.panda,self.panda3.pandaEndEffectorIndex)[0])
 
@@ -164,17 +180,20 @@ class CustomEnv(gym.Env):
         self.panda.current_j_pos =  np.array(p.getJointStates(self.panda.panda,np.arange(0,7)))[:,0]
         global force
         force = np.array(p.getJointState(self.panda.panda,7)[2][:3])
+        force_2 = np.array(p.getJointState(self.panda3.panda,7)[2][:3])
         #print(force)
         #self.panda2.step2()
         
-        des= self.panda2.accurateInverseKinematics(tuple(np.array(loc) + [600,0,0,0,0,0,0,0]), 0.1,50,rp=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02] )
+        des= self.panda2.accurateInverseKinematics(tuple(np.array(pos2) + [600,0,0,0,0,0,0,0]), 0.1,50,rp=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02] )
         #self.panda.step(position = loc)
-        self.panda.step3(des,loc)
+        #self.panda.step3(des,loc)
         #self.panda2.step(position = tuple(np.array(loc) + [1,0,0,0,0,0,0,0]))
+        self.panda.stepCQ(pos2)
 
         #autonomous robot control
         des2 = self.panda4.accurateInverseKinematics(tuple(np.array(pos) + [3,0,0,0,0,0,0,0]), 0.1,50,rp=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02], mode = True )
-        self.panda3.step3(des2)
+        #self.panda3.step3(np.array(p.getJointStates(self.panda3.panda,np.arange(0,7)))[:,0])
+        self.panda3.stepCQ(pos)
 
         #self.panda5.step3(des2)
 
@@ -190,31 +209,100 @@ class CustomEnv(gym.Env):
         if(t_sleep) >0:
             
             time.sleep(self.timeStep)
-        return np.array(self.target_pos), reward, done, dict()
+        reward -= np.linalg.norm(force_2)/1000
+
+
+
+        contactsByRobot = p.getContactPoints(self.legos[0],self.panda3.panda)
+        contactsByRobot2 = p.getContactPoints(self.legos[0],self.panda.panda)
+        forcesByRobot = np.array([0,0,0])
+        for v in contactsByRobot:
+            forcesByRobot = forcesByRobot + np.array(v[7])*np.array(v[9])
+
+        contactsOnJenga = p.getContactPoints(self.legos[0])
+        forcesOnJenga = np.array([0,0,0])
+        for v in contactsOnJenga:
+            forcesOnJenga = forcesOnJenga + np.array(v[7])*np.array(v[9])
+
+        dot_product = np.dot((forcesOnJenga/np.linalg.norm(forcesOnJenga)),(forcesByRobot/np.linalg.norm(forcesByRobot)))
+        projectedVectorNorm = np.linalg.norm(forcesByRobot)*dot_product
+        #this is basically THE dot product
+        individualEfficiency = projectedVectorNorm/np.linalg.norm(forcesByRobot) 
+        print("Individual efficiency: ", individualEfficiency)
+
+        print("Forces : ", forcesByRobot, " , ", forcesOnJenga)
+
+        if(not np.isnan(individualEfficiency)):
+            reward += individualEfficiency *4
+
+        keys = p.getKeyboardEvents()
+        if len(keys)>0:
+            for k,v in keys.items():
+                if v&p.KEY_WAS_TRIGGERED:
+                    if (k==ord('1')):
+                        self.reset()
+
+        if(len(contactsByRobot) == 0 or len(contactsByRobot2) == 0):
+            reward = -1000
+            done = True
+
+
+        state = np.concatenate((np.array(self.target_pos), np.array(force_2),np.array(p.getLinkState(self.panda3.panda,self.panda3.pandaEndEffectorIndex)[0])))
+        return state, reward, done, dict()
     def reset(self):
         p.resetSimulation()
         p.setTimeStep(self.timeStep)
         p.setGravity(0,-9.8,0)
         self.setupscene()
-        return np.array(self.target_pos)
+        force_2 = np.array(p.getJointState(self.panda3.panda,7)[2][:3])
+        state = np.concatenate((np.array(self.target_pos), np.array(force_2),np.array(p.getLinkState(self.panda3.panda,self.panda3.pandaEndEffectorIndex)[0])))
+        return state
+
+
+        
+        
         
     def setupscene(self):
         flags = p.URDF_ENABLE_CACHED_GRAPHICS_SHAPES
-        legos=[]
+        self.legos=[]
         p.loadURDF("table/table.urdf", [0.25, 0.2, -0.65], [-0.5, -0.5, -0.5, 0.5], flags=flags)
-        p.loadURDF("jenga/jenga.urdf", [0, 0.91, -0.65], [-0.5, -0.5, -0.5, 0.5], globalScaling = 1)
-        self.panda = panda_sim.PandaSim(p,[0,0.81,0])
+        
+        orn=[-0.707107, 0.0, 0.0, 0.707107]#p.getQuaternionFromEuler([-math.pi/2,math.pi/2,0])
+        q1 = Quaternion(0.707107, -0.707107, 0.0, 0.0 ) # Rotate 180 about X
+        q2 = Quaternion(axis=[0,0, 1], angle=3.14159265 ) 
+        q3 = q1 * q2 # Composite rotation of q1 then q2 expressed as standard multiplication
+        orn = (q3.x, q3.y, q3.z, q3.w)
+        q4 = Quaternion(axis= [0,0, 1], angle=math.pi*3/2)
+        q4 = q3*q4
+        orn2 = (q4.x, q4.y, q4.z, q4.w)
+        self.legos.append(p.loadURDF("jenga/jenga.urdf",np.array([0, 1.01, -0.7]),orn2, globalScaling = 1.5))
+        p.changeVisualShape(self.legos[0],-1,rgbaColor=[1,0,0,1])
+        #p.loadURDF("jenga/jenga.urdf", [0, 0.91, -0.65], [-0.5, -0.5, -0.5, 0.5], globalScaling = 1)
+        self.panda = panda_sim_grasp.PandaSimAuto(p,[0,0.81,0],lego=self.legos[0])
         self.panda2 = panda_sim.PandaSim(p,[3,0.81,0])
         #self.panda3 = panda_sim.PandaSim(p,[0.4,0.81,-1.5], rotate = True)
-        self.panda4 = panda_sim.PandaSim(p,[3.4,0.81,-1.5], rotate = True)
-        self.panda3 = panda_sim_grasp.PandaSimAuto(p,[0.4,0.81,-1.5], rotate = True)
+        self.panda4 = panda_sim.PandaSim(p,[3.0,0.81,-1.4], rotate = True)
+        self.panda3 = panda_sim_grasp.PandaSimAuto(p,[0.0,0.81,-1.4], rotate = True, lego=self.legos[0])
         p.enableJointForceTorqueSensor(self.panda.panda, 7,1)
+        p.enableJointForceTorqueSensor(self.panda3.panda, 7,1)
+
+        
 
         start = time.time()
         while(time.time() < start+7.0):
             self.panda3.step_g()
+            self.panda.step_g()
+            loc = location
+            global force
+            force = np.array(p.getJointState(self.panda.panda,7)[2][:3])
+            force_2 = np.array(p.getJointState(self.panda3.panda,7)[2][:3])
+
+
             p.stepSimulation()
             time.sleep(self.timeStep)
+
+
+
 
 
 

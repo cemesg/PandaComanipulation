@@ -8,15 +8,15 @@ ikSolver = 0
 pandaEndEffectorIndex = 11 #8
 pandaNumDofs = 7
 
-ll = [-7]*pandaNumDofs
+
+jointPositions=np.array([0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02])
+rp = jointPositions
+ll = rp[:7] + np.array([1]*pandaNumDofs )
 #upper limits for null space (todo: set them to proper range)
-ul = [7]*pandaNumDofs
+ul = rp[:7] - np.array([1]*pandaNumDofs )
 #joint ranges for null space (todo: set them to proper range)
 jr = [7]*pandaNumDofs
 #restposes for null space
-jointPositions=[0.98, 0.458, 0.31, -2.24, -0.30, 2.66, 2.32, 0.02, 0.02]
-rp = jointPositions
-
 
 class PandaSim(object):
   def __init__(self, bullet_client, offset, rotate = False):
@@ -37,8 +37,14 @@ class PandaSim(object):
     if(rotate):
       q1 = Quaternion(0.707107, -0.707107, 0.0, 0.0 ) # Rotate 180 about X
       q2 = Quaternion(axis=[0,0, 1], angle=3.14159265 ) 
+      
       q3 = q1 * q2 # Composite rotation of q1 then q2 expressed as standard multiplication
+      rotated_array = q3.rotate(np.array([0.0, 0.0, -1.0]))
+      q4 = Quaternion(axis= [0,0, 1], angle=math.pi/2)
+      q4 = q3*q4
+      #q3 = q3*q4
       orn = (q3.x, q3.y, q3.z, q3.w)
+      orn2 = (q4.x, q4.y, q4.z, q4.w)
     eul = self.bullet_client.getEulerFromQuaternion([-0.5, -0.5, -0.5, 0.5])
     self.panda = self.bullet_client.loadURDF("franka_panda/panda.urdf", np.array([0,0,0])+self.offset, orn, useFixedBase=True, flags=flags)
     index = 0
@@ -63,12 +69,13 @@ class PandaSim(object):
   def accurateInverseKinematics(self, position, treshold, maxIter,  rp=None, mode = False):
     x,y,z,b, q,w,e,r = position
     if(mode == False):
-      target_pos = [x/200,1.11+y/200,-0.6+z/200]
+      target_pos = [x/200,0.71+y/200,-0.6+z/200]
       q1 = Quaternion(r,q,w,e) # Rotate 180 about X
       q2 = Quaternion(axis=[0, 1, 0], angle=3.14159265 ) # Rotate 90 about Y
       q3 = q1 * q2 # Composite rotation of q1 then q2 expressed as standard multiplication
-
+      q3 = Quaternion(axis = q3.axis, angle=q3.angle)
       targetorientation = (q3.x, q3.y, q3.z, q3.w) 
+      
     else:
       target_pos = [x,y,z]
 
@@ -110,7 +117,7 @@ class PandaSim(object):
       self.finger_target = 0.01
     else:
       self.finger_target = 0.04
-    pos = [x/200,1.11+y/200,-0.6+z/200]
+    pos = [x/100,0.81+y/100,-0.6+z/100]
 
     
    
@@ -162,5 +169,26 @@ class PandaSim(object):
       #self.bullet_client.setJointMotorControl2(self.panda, 5, self.bullet_client.POSITION_CONTROL,(g2)*360/400000 ,force= 10)
       #self.bullet_client.setJointMotorControl2(self.panda, 6, self.bullet_client.POSITION_CONTROL,(g1-1800)*360/400000 ,force= 10)   
       pass
-  def moveToCartAndQuat(self, cart, quat):
-      pass
+  def stepCQ(self, position = (0,0,0,0,-0.707107, 0.0, 0.0, 0.707107)):
+    #print(" Parameters", ll, ul, jr)
+    #t = self.t
+    #self.t += 1./60.
+    #pos = [self.offset[0]+0.2 * math.sin(1.5 * t), self.offset[1]+0.044, self.offset[2]+-0.6 + 0.1 * math.cos(1.5 * t)]
+    x,y,z,b, q,w,e,r = position
+    if(True):
+      self.finger_target = 0.01
+    else:
+      self.finger_target = 0.04
+    orn = (q,w,e,r)
+
+    #jointPoses = self.bullet_client.calculateInverseKinematics(self.panda,pandaEndEffectorIndex, pos, orn, ll, ul,
+    jointPoses = self.bullet_client.calculateInverseKinematics(self.panda,pandaNumDofs, pos, orn, ll, ul,
+      jr, rp, maxNumIterations=5)
+      
+    for i in range(pandaNumDofs):
+        self.bullet_client.setJointMotorControl2(self.panda, i, self.bullet_client.POSITION_CONTROL, jointPoses[i],force=5 * 240.)
+    for i in [9,10]:
+      self.bullet_client.setJointMotorControl2(self.panda, i, self.bullet_client.POSITION_CONTROL,self.finger_target ,force= 10)
+    #self.bullet_client.setJointMotorControl2(self.panda, 5, self.bullet_client.POSITION_CONTROL,(g2)*360/400000 ,force= 10)
+    #self.bullet_client.setJointMotorControl2(self.panda, 6, self.bullet_client.POSITION_CONTROL,(g1-1800)*360/400000 ,force= 10)   
+    pass

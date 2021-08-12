@@ -90,7 +90,7 @@ HDCallbackCode HDCALLBACK updateDeviceCallback(void *pUserData)
     }
     //MyMatrix = glm::gtx::transform::rotate(MyMatrix, glm::radians(180.0), glm::vec3(0,1,0))
     myQuat = glm::quat_cast(MyMatrix);
-    std::cout << std::endl;
+    //std::cout << std::endl;
 
     /* Also check the error state of HDAPI. */
     gServoDeviceData.m_error = hdGetError();
